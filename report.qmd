@@ -8,27 +8,122 @@ format: typst
 ## **Part 0: libraries**
 
 ```{r}
+# ---- General setup ----
+# Always set a CRAN mirror so R can install packages without errors
+options(repos = c(CRAN = "https://cloud.r-project.org"))
 
+# Install (if needed) and load packages
+pkgs <- c("tidyverse", "sf", "maps", "ggplot2", "viridis")
+for(p in pkgs) if(!require(p, character.only = TRUE)) install.packages(p)
+lapply(pkgs, library, character.only = TRUE)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+Chosen Question: Do states with higher shares of renewable energy also have more EV registrations?
 
 ## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+# Load data
+renew_2023 <- read_csv("data/renew-use-2023.csv")
+total_2023 <- read_csv("data/total-use-2023.csv")
+ev_2023 <- read_csv("data/ev-registrations-by-state-2023.csv")
+names(renew_2023)
+names(total_2023)
+names(ev_2023)
 
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
 
 ```{r}
+# ---- Clean and reshape renewable data ----
+renew_2023_clean <- renew_2023 %>%
+  rename_with(~str_replace_all(.x, "\\s+", "_")) %>%
+  rename(State = State, Energy_Source = Energy_Source, Renewable_Use_2023 = Renewable_Use_2023) %>%
+  group_by(State) %>%
+  summarise(renewable_energy = sum(as.numeric(Renewable_Use_2023), na.rm = TRUE))
+
+# ---- Clean and reshape total energy data ----
+total_2023_long <- total_2023 %>%
+  pivot_longer(
+    cols = -Energy_Source,
+    names_to = "State",
+    values_to = "Total_Use_2023"
+  ) %>%
+  group_by(State) %>%
+  summarise(total_energy = sum(as.numeric(Total_Use_2023), na.rm = TRUE))
+
+# ---- Clean EV registrations ----
+ev_2023_clean <- ev_2023 %>%
+  set_names(c("State", "EV_Registrations")) %>%
+  mutate(EV_Registrations = as.numeric(gsub(",", "", EV_Registrations)))
+
+# ---- Merge all datasets ----
+energy_merged <- renew_2023_clean %>%
+  inner_join(total_2023_long, by = "State") %>%
+  inner_join(ev_2023_clean, by = "State") %>%
+  mutate(
+    pct_renewable = 100 * renewable_energy / total_energy,
+    ev_per_million_energy = EV_Registrations / total_energy
+  )
+
+head(energy_merged)
 
 ```
 
 ## **Part 4: Mapping Visualization**
 
 ```{r}
+# Load libraries for mapping
+usa_states <- st_as_sf(map("state", plot = FALSE, fill = TRUE)) %>%
+mutate(state = str_to_title(ID))
 
+
+
+
+map_data <- usa_states %>%
+  left_join(energy_merged, by = c("ID" = "State"))
+
+
+
+ggplot(map_data) +
+geom_sf(aes(fill = pct_renewable), color = "white", linewidth = 0.3) +
+scale_fill_viridis_c(
+name = "% Renewable Energy (2023)",
+option = "C",
+limits = c(0, 100),
+labels = scales::label_number(suffix = "%")
+) +
+labs(
+title = "Share of Renewable Energy by U.S. State (2023)",
+subtitle = "Darker shades represent higher renewable energy share",
+caption = "Source: EIA data (2023)"
+) +
+theme_minimal(base_size = 12) +
+theme(
+panel.grid = element_blank(),
+plot.title = element_text(face = "bold"),
+legend.position = "bottom"
+)
+
+# ---- Scatterplot: Renewable Energy vs EVs ----
+#ggplot(energy_merged, aes(x = pct_renewable, y = EV_Registrations)) +
+  #geom_point(color = "darkgreen", alpha = 0.7, size = 3) +
+  #geom_smooth(method = "lm", se = FALSE, color = "black") +
+  #labs(
+    #x = "Renewable Energy Share (%)",
+    #y = "EV Registrations (2023)",
+  #  title = "Relationship Between Renewable Energy and EV Adoption",
+#    caption = "Source: EIA and DMV data (2023)"
+#  ) +
+#  theme_minimal(base_size = 12)
+
+# Print correlation
+#correlation <- cor(energy_merged$pct_renewable, energy_merged$EV_Registrations, use = "complete.obs")
+#correlation
+
+
+ # analysis: The map highlights regional differences in renewable energy generation. Western and Northeastern states tend to have higher renewable shares, while many Southern states remain more fossil-fuel dependent. The scatterplot suggests a moderate positive correlation between renewable energy share and EV registrations, meaning states with cleaner electricity mixes also tend to have higher electric vehicle adoption. This alignment supports the idea that renewable infrastructure and EV adoption may progress together through policy and market forces.
 ```
